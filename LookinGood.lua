@@ -25,10 +25,11 @@ local RANGE_ITEM_15 = 1251       -- Linen Bandage: usable on friendly units with
 local INTERACT_TRADE = 2         -- CheckInteractDistance trade range, about 11 yards
 local INTERACT_FOLLOW = 4        -- CheckInteractDistance follow range, about 28 yards
 local DB_VERSION = 2
+local WELCOME_DELAY = 3          -- seconds after login before the first-run welcome appears
 
 local DEFAULTS = {
 	enabled = true,
-	share = true,
+	share = false, -- opt-in from the welcome screen or /lg share on
 	range = 15,
 	cooldown = 30,
 	message = "Hey {name}! Lookin' good!",
@@ -45,7 +46,9 @@ local pending = {}     -- ordered list of { name, time } waiting to be greeted
 local lastBroadcast = { time = 0 }
 local lastRosterRequest = 0
 local button
+local welcome
 local UpdateButton
+local UpdateWelcome
 
 local UNITS = { "target", "focus", "mouseover" }
 for i = 1, 4 do UNITS[#UNITS + 1] = "party" .. i end
@@ -218,8 +221,20 @@ local function Broadcast(now)
 	lastBroadcast = { time = now, x = x, y = y, instance = instance }
 end
 
+-- Sharing is two-way: you see guildmates' positions only while sharing your own.
+local function SetShare(on)
+	db.share = on
+	if on then
+		lastBroadcast = { time = 0 } -- announce ourselves on the next tick
+	else
+		SendAddon("H")
+		wipe(positions)
+	end
+	UpdateWelcome()
+end
+
 local function OnAddonMessage(prefix, text, channel, sender)
-	if prefix ~= PREFIX or channel ~= "GUILD" or not myName then return end
+	if prefix ~= PREFIX or channel ~= "GUILD" or not myName or not db.share then return end
 	if IsSecret(text) or IsSecret(sender) then return end
 	local name = FullName(sender)
 	if IsMe(name) then return end -- guild addon messages echo back to the sender
@@ -363,6 +378,100 @@ UpdateButton = function()
 	button:Show()
 end
 
+local WELCOME_INTRO = "Lookin' Good lets you know when a guildmate is nearby, "
+	.. "so you can stop and say hi."
+local WELCOME_BODY = "Turn on location sharing to see where your guildmates are. "
+	.. "Guildmates who run Lookin' Good share their position with each other, and "
+	.. "you only see theirs while you share yours."
+local WELCOME_PRIVACY = "Your position is sent only to your guild, over the hidden "
+	.. "addon channel, and only while you're outside instances and out of combat. "
+	.. "Change it any time with /lg share on or /lg share off."
+local WELCOME_TIP = "Tip: turn on friendly nameplates (Shift+V) to spot guildmates "
+	.. "who don't have the addon."
+
+local function CreateWelcome()
+	local f = CreateFrame("Frame", "LookinGoodWelcome", UIParent, "BasicFrameTemplateWithInset")
+	f:SetWidth(400)
+	f:SetPoint("CENTER")
+	f:SetFrameStrata("DIALOG")
+	f:SetMovable(true)
+	f:SetClampedToScreen(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:SetScript("OnHide", function() db.welcomeShown = true end)
+	tinsert(UISpecialFrames, "LookinGoodWelcome") -- Escape closes it
+
+	local title = f.TitleText
+	if not title then
+		title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+		title:SetPoint("TOP", 0, -5)
+	end
+	title:SetText("Welcome to Lookin' Good")
+
+	local height = 40
+	local last
+	local function AddText(template, gap, text)
+		local fs = f:CreateFontString(nil, "OVERLAY", template)
+		fs:SetWidth(360)
+		fs:SetJustifyH("LEFT")
+		if last then
+			fs:SetPoint("TOPLEFT", last, "BOTTOMLEFT", 0, -gap)
+		else
+			fs:SetPoint("TOPLEFT", 20, -height)
+		end
+		fs:SetText(text)
+		height = height + gap + fs:GetStringHeight()
+		last = fs
+		return fs
+	end
+
+	AddText("GameFontHighlight", 0, WELCOME_INTRO)
+	f.status = AddText("GameFontNormalLarge", 18, "Location sharing: Off")
+	AddText("GameFontHighlight", 8, WELCOME_BODY)
+	AddText("GameFontHighlightSmall", 12, WELCOME_PRIVACY)
+	AddText("GameFontDisableSmall", 12, WELCOME_TIP)
+	f:SetHeight(math.max(height + 70, 320)) -- floor in case text isn't measured yet
+
+	f.enable = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.enable:SetSize(190, 26)
+	f.enable:SetPoint("BOTTOMLEFT", 20, 18)
+	f.enable:SetScript("OnClick", function()
+		SetShare(true)
+		Print("location sharing on. Guildmates running Lookin' Good will show up now.")
+	end)
+
+	f.later = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	f.later:SetSize(120, 26)
+	f.later:SetPoint("BOTTOMRIGHT", -20, 18)
+	f.later:SetScript("OnClick", function() f:Hide() end)
+
+	f:Hide()
+	return f
+end
+
+UpdateWelcome = function()
+	if not welcome then return end
+	if db.share then
+		welcome.status:SetText("Location sharing: |cff33ff33On|r")
+		welcome.enable:SetText("Sharing is on")
+		welcome.enable:Disable()
+		welcome.later:SetText("Close")
+	else
+		welcome.status:SetText("Location sharing: |cffff4040Off|r")
+		welcome.enable:SetText("Enable location sharing")
+		welcome.enable:Enable()
+		welcome.later:SetText("Not now")
+	end
+end
+
+local function ShowWelcome()
+	welcome = welcome or CreateWelcome()
+	UpdateWelcome()
+	welcome:Show()
+end
+
 ---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------
@@ -379,6 +488,9 @@ local function ListMembers()
 	table.sort(names)
 	local mx, my, minstance = MyPosition()
 	Print(("%d guild members online:"):format(#names))
+	if not db.share then
+		print("  |cffaaaaaaTurn on location sharing (/lg share on) to see distances.|r")
+	end
 	for _, name in ipairs(names) do
 		local line = ShortName(name) .. " - " .. online[name]
 		local p = positions[name]
@@ -394,7 +506,8 @@ local function ShowHelp()
 	print("  /lg list - online guild members, zone, and distance if known")
 	print("  /lg greet - say hi to the next nearby guildmate")
 	print(("  /lg on | off - greeting prompts (now %s)"):format(db.enabled and "on" or "off"))
-	print(("  /lg share on | off - share your position with the guild (now %s)"):format(db.share and "on" or "off"))
+	print(("  /lg share on | off - share positions with the guild (now %s)"):format(db.share and "on" or "off"))
+	print("  /lg welcome - show the welcome screen again")
 	print(("  /lg range <yards> - greeting distance (now %d)"):format(db.range))
 	print(("  /lg cooldown <minutes> - wait before greeting the same person again (now %d)"):format(db.cooldown))
 	print(("  /lg message <text> - use {name} for their name (now \"%s\")"):format(db.message))
@@ -417,9 +530,10 @@ local function OnSlash(input)
 		end
 		Print("greeting prompts " .. cmd .. ".")
 	elseif cmd == "share" and (rest == "on" or rest == "off") then
-		db.share = (rest == "on")
-		if not db.share then SendAddon("H") end
-		Print("position sharing " .. rest .. ".")
+		SetShare(rest == "on")
+		Print("location sharing " .. rest .. ".")
+	elseif cmd == "welcome" then
+		ShowWelcome()
 	elseif cmd == "range" and tonumber(rest) then
 		db.range = math.max(1, tonumber(rest))
 		Print(("range set to %d yards."):format(db.range))
@@ -471,6 +585,7 @@ events:SetScript("OnEvent", function(_, event, ...)
 		end
 		RequestRoster(GetTime())
 		C_Timer.NewTicker(TICK_SECONDS, Tick)
+		if not db.welcomeShown then C_Timer.After(WELCOME_DELAY, ShowWelcome) end
 	elseif event == "GUILD_ROSTER_UPDATE" then
 		RefreshRoster()
 	elseif event == "CHAT_MSG_ADDON" then
