@@ -343,23 +343,41 @@ local function CreateButton()
 	button:RegisterForDrag("LeftButton")
 	button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	button:SetScript("OnDragStart", function(self)
-		if IsShiftKeyDown() then self:StartMoving() end
+		self.dragging = true
+		self:StartMoving()
 	end)
 	button:SetScript("OnDragStop", function(self)
 		self:StopMovingOrSizing()
+		self:SetUserPlaced(false) -- we save the position ourselves, not in layout-local.txt
 		local point, _, relPoint, x, y = self:GetPoint()
 		db.buttonPoint = { point, relPoint, x, y }
+		self.droppedAt = GetTime()
+		self.dragging = false
 	end)
-	button:SetScript("OnClick", function(_, mouse)
-		if IsShiftKeyDown() then return end
-		if mouse == "RightButton" then SkipNext() else LookinGood_GreetNext() end
+	button:SetScript("OnClick", function(self, mouse)
+		-- Releasing a drag can also count as a click; don't /say by accident.
+		if self.dragging or (self.droppedAt and GetTime() - self.droppedAt < 0.3) then return end
+		if self.moveMode then
+			self.moveMode = false
+			Print("button position saved.")
+			UpdateButton()
+		elseif mouse == "RightButton" then
+			SkipNext()
+		else
+			LookinGood_GreetNext()
+		end
 	end)
 	button:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:AddLine("Lookin' Good")
-		GameTooltip:AddLine("Left-click: /say the greeting", 1, 1, 1)
-		GameTooltip:AddLine("Right-click: skip", 1, 1, 1)
-		GameTooltip:AddLine("Shift-drag: move", 1, 1, 1)
+		if self.moveMode then
+			GameTooltip:AddLine("Drag: move", 1, 1, 1)
+			GameTooltip:AddLine("Click: done", 1, 1, 1)
+		else
+			GameTooltip:AddLine("Left-click: /say the greeting", 1, 1, 1)
+			GameTooltip:AddLine("Right-click: skip", 1, 1, 1)
+			GameTooltip:AddLine("Drag: move", 1, 1, 1)
+		end
 		GameTooltip:Show()
 	end)
 	button:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -368,6 +386,11 @@ end
 
 UpdateButton = function()
 	if not button then return end
+	if button.moveMode then
+		button:SetText("Drag to move, click when done")
+		button:Show()
+		return
+	end
 	if #pending == 0 then
 		button:Hide()
 		return
@@ -508,6 +531,8 @@ local function ShowHelp()
 	print(("  /lg on | off - greeting prompts (now %s)"):format(db.enabled and "on" or "off"))
 	print(("  /lg share on | off - share positions with the guild (now %s)"):format(db.share and "on" or "off"))
 	print("  /lg welcome - show the welcome screen again")
+	print("  /lg move - show the greeting button so you can drag it into place")
+	print("  /lg resetpos - put the greeting button back in its default spot")
 	print(("  /lg range <yards> - greeting distance (now %d)"):format(db.range))
 	print(("  /lg cooldown <minutes> - wait before greeting the same person again (now %d)"):format(db.cooldown))
 	print(("  /lg message <text> - use {name} for their name (now \"%s\")"):format(db.message))
@@ -534,6 +559,16 @@ local function OnSlash(input)
 		Print("location sharing " .. rest .. ".")
 	elseif cmd == "welcome" then
 		ShowWelcome()
+	elseif cmd == "move" then
+		button.moveMode = not button.moveMode
+		Print(button.moveMode and "drag the button where you want it, then click it."
+			or "button position saved.")
+		UpdateButton()
+	elseif cmd == "resetpos" then
+		db.buttonPoint = nil
+		button:ClearAllPoints()
+		button:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
+		Print("button moved back to its default spot.")
 	elseif cmd == "range" and tonumber(rest) then
 		db.range = math.max(1, tonumber(rest))
 		Print(("range set to %d yards."):format(db.range))
