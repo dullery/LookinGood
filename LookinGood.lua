@@ -332,8 +332,12 @@ end
 -- UI
 ---------------------------------------------------------------------------
 
+-- The button is a secure action button so middle-click can /target the guildmate
+-- (targeting is protected). The catch: while in combat the game won't let us show,
+-- hide, move, or reconfigure it, so those changes wait for PLAYER_REGEN_ENABLED.
 local function CreateButton()
-	button = CreateFrame("Button", "LookinGoodButton", UIParent, "UIPanelButtonTemplate")
+	button = CreateFrame("Button", "LookinGoodButton", UIParent,
+		"SecureActionButtonTemplate, UIPanelButtonTemplate")
 	button:SetSize(220, 28)
 	button:SetFrameStrata("HIGH")
 	local p = db.buttonPoint
@@ -345,8 +349,12 @@ local function CreateButton()
 	button:SetMovable(true)
 	button:SetClampedToScreen(true)
 	button:RegisterForDrag("LeftButton")
-	button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	-- Middle is registered for both down and up: secure buttons act on key down or up
+	-- depending on the ActionButtonUseKeyDown setting, and this covers both.
+	button:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp", "MiddleButtonDown")
+	button:SetAttribute("type3", "macro")
 	button:SetScript("OnDragStart", function(self)
+		if InCombatLockdown() then return end
 		self.dragging = true
 		self:StartMoving()
 	end)
@@ -358,7 +366,9 @@ local function CreateButton()
 		self.droppedAt = GetTime()
 		self.dragging = false
 	end)
-	button:SetScript("OnClick", function(self, mouse)
+	-- PostClick, not OnClick: the secure template owns OnClick and runs the middle-click macro.
+	button:SetScript("PostClick", function(self, mouse, down)
+		if down or mouse == "MiddleButton" then return end
 		-- Releasing a drag can also count as a click; don't /say by accident.
 		if self.dragging or (self.droppedAt and GetTime() - self.droppedAt < 0.3) then return end
 		if self.moveMode then
@@ -380,6 +390,7 @@ local function CreateButton()
 		else
 			GameTooltip:AddLine("Left-click: /say the greeting", 1, 1, 1)
 			GameTooltip:AddLine("Right-click: skip", 1, 1, 1)
+			GameTooltip:AddLine("Middle-click: target them", 1, 1, 1)
 			GameTooltip:AddLine("Drag: move", 1, 1, 1)
 		end
 		GameTooltip:Show()
@@ -388,24 +399,38 @@ local function CreateButton()
 	button:Hide()
 end
 
+local buttonUpdateQueued = false
+
+-- Middle-click macro. Ambiguate drops the realm when it's ours, which /target prefers.
+local function TargetMacro(name)
+	return name and ("/targetexact " .. Ambiguate(name, "none")) or nil
+end
+
 UpdateButton = function()
 	if not button then return end
-	if button.moveMode then
-		button:SetText("Drag to move, click when done")
-		button:Show()
-		return
-	end
 	for i = #pending, 1, -1 do
 		if IsMe(pending[i].name) then table.remove(pending, i) end
 	end
-	if #pending == 0 then
-		button:Hide()
+
+	local label, target
+	if button.moveMode then
+		label = "Drag to move, click when done"
+	elseif #pending > 0 then
+		target = pending[1].name
+		label = "Say hi to " .. ShortName(target)
+		if #pending > 1 then label = label .. (" (+%d)"):format(#pending - 1) end
+	end
+
+	if label then button:SetText(label) end -- text can change in combat
+	if InCombatLockdown() then
+		buttonUpdateQueued = true
 		return
 	end
-	local label = "Say hi to " .. ShortName(pending[1].name)
-	if #pending > 1 then label = label .. (" (+%d)"):format(#pending - 1) end
-	button:SetText(label)
-	button:Show()
+	buttonUpdateQueued = false
+
+	local macro = TargetMacro(target)
+	if button:GetAttribute("macrotext3") ~= macro then button:SetAttribute("macrotext3", macro) end
+	button:SetShown(label ~= nil)
 end
 
 local WELCOME_INTRO = "Lookin' Good lets you know when a guildmate is nearby, "
@@ -566,6 +591,8 @@ local function OnSlash(input)
 		Print("location sharing " .. rest .. ".")
 	elseif cmd == "welcome" then
 		ShowWelcome()
+	elseif (cmd == "move" or cmd == "resetpos") and InCombatLockdown() then
+		Print("can't move the button during combat. Try again after the fight.")
 	elseif cmd == "move" then
 		button.moveMode = not button.moveMode
 		Print(button.moveMode and "drag the button where you want it, then click it."
@@ -606,6 +633,7 @@ events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("GUILD_ROSTER_UPDATE")
 events:RegisterEvent("CHAT_MSG_ADDON")
+events:RegisterEvent("PLAYER_REGEN_ENABLED")
 
 events:SetScript("OnEvent", function(_, event, ...)
 	if event == "ADDON_LOADED" then
@@ -633,5 +661,7 @@ events:SetScript("OnEvent", function(_, event, ...)
 		RefreshRoster()
 	elseif event == "CHAT_MSG_ADDON" then
 		OnAddonMessage(...)
+	elseif event == "PLAYER_REGEN_ENABLED" then
+		if buttonUpdateQueued then UpdateButton() end
 	end
 end)
