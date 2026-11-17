@@ -1,0 +1,38 @@
+# Lookin' Good
+
+A World of Warcraft: Forever addon. It tracks your online guild members, and when you're near one it asks you to `/say Hey <name>! Lookin' good!`.
+
+## Install
+
+Copy this folder into the Forever client's `Interface/AddOns/` directory. The folder must be named `LookinGood`.
+
+If the addon shows as "out of date", run this in game to see the client's interface number, then update `## Interface:` in `LookinGood.toc`:
+
+```
+/run print((select(4, GetBuildInfo())))
+```
+
+## How it works
+
+- **Online members:** The addon reads the guild roster: who's online and which zone they're in.
+- **Exact distance:** Guildmates who also run Lookin' Good share their position over the hidden guild addon channel, so the addon knows exactly how far away they are. Turn this off with `/lg share off`.
+- **Guildmates without the addon:** They're detected when they're a unit you can see (party/raid, target, focus, mouseover, or a friendly nameplate). Then they pass a 15 yard range check, measured with Linen Bandage range. If that check isn't available, the client's ~11 yard trade range is used instead. Turn on friendly nameplates (Shift+V by default) to catch more of them.
+- **Greeting:** When someone is in range, a **Say hi to <name>** button appears. Left-click it, or press your keybind (Options → Keybindings → AddOns → Lookin' Good), to send the `/say`. Right-click skips them. Shift-drag moves the button.
+- **Cooldown:** Each person is greeted at most once per 30 minutes (configurable).
+
+### Why a click and not fully automatic?
+
+Forever runs on the modern Retail client, and Blizzard only lets `/say` be sent from a real key press or mouse click outside instances. An addon that sends it on a timer gets blocked. So Lookin' Good detects the guildmate and lines up the message, and you fire it with one key or click.
+
+## Commands
+
+| Command | Effect |
+| --- | --- |
+| `/lg list` | Online guild members, zone, and distance if known |
+| `/lg greet` | Greet the next nearby guildmate |
+| `/lg on` / `/lg off` | Turn greeting prompts on or off |
+| `/lg share on` / `off` | Share your position with the guild |
+| `/lg range <yards>` | Greeting distance (default 15) |
+| `/lg cooldown <minutes>` | Wait before greeting the same person again (default 30) |
+| `/lg message <text>` | Custom greeting; `{name}` is replaced with their name |
+| `/lg reset` | Clear greeting cooldowns |

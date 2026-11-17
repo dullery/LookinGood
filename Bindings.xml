@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="LOOKINGOOD_GREET" header="LOOKINGOOD" category="ADDONS">
+		LookinGood_GreetNext()
+	</Binding>
+</Bindings>

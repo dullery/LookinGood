@@ -1,0 +1,7 @@
+## Interface: 16001
+## Title: Lookin' Good
+## Notes: Tracks your online guild members and lets you greet them when you're near.
+## Version: 0.1.0
+## SavedVariables: LookinGoodDB
+
+LookinGood.lua
