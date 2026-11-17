@@ -40,6 +40,7 @@ BINDING_NAME_LOOKINGOOD_GREET = "Greet nearby guildmate"
 
 local db
 local myName
+local myGUID
 local online = {}      -- [fullName] = zone, from the guild roster
 local positions = {}   -- [fullName] = { instance, x, y, time }, from addon broadcasts
 local pending = {}     -- ordered list of { name, time } waiting to be greeted
@@ -84,17 +85,17 @@ local function ShortName(name)
 	return (strsplit("-", name))
 end
 
-local function MyRealm()
-	return GetNormalizedRealmName() or (GetRealmName():gsub("[%s%-]", ""))
-end
-
 -- True if a "Name" or "Name-Realm" string refers to the player.
--- Compared piecewise so a missing or differently formatted realm can't slip through.
+-- Only the character name is compared: realm strings come back formatted differently
+-- depending on the API and realm (connected realms, spaces, renames), and a realm
+-- mismatch must never make us greet ourselves. The cost is that a guildmate on another
+-- realm with exactly our name is never prompted.
 local function IsMe(name)
 	if not name or IsSecret(name) then return true end -- can't tell, so treat it as us
-	local short, realm = name:match("^([^-]+)-?(.*)$")
-	if short ~= UnitName("player") then return false end
-	return realm == "" or realm:gsub("[%s%-]", "") == MyRealm()
+	local me = UnitName("player")
+	if not me or IsSecret(me) then return true end
+	local short = strsplit("-", name)
+	return short:lower() == me:lower()
 end
 
 local function UnitFullNameOf(unit)
@@ -165,8 +166,8 @@ local function OnCooldown(name)
 	return last ~= nil and (time() - last) < db.cooldown * 60
 end
 
-local function Consider(name)
-	if IsMe(name) or OnCooldown(name) then return end
+local function Consider(name, guid)
+	if IsMe(name) or (guid and guid == myGUID) or OnCooldown(name) then return end
 	local i = FindPending(name)
 	if i then
 		pending[i].time = GetTime() -- still nearby, keep the prompt alive
@@ -180,6 +181,7 @@ end
 function LookinGood_GreetNext()
 	PrunePending()
 	local entry = table.remove(pending, 1)
+	while entry and IsMe(entry.name) do entry = table.remove(pending, 1) end
 	if not entry then
 		Print("No guildmates waiting for a greeting.")
 		UpdateButton()
@@ -217,7 +219,7 @@ local function Broadcast(now)
 	end
 	if moved < BROADCAST_MIN_MOVE and now - lastBroadcast.time < BROADCAST_HEARTBEAT then return end
 
-	SendAddon(("P:%d:%.1f:%.1f"):format(instance, x, y))
+	SendAddon(("P:%d:%.1f:%.1f:%s"):format(instance, x, y, myGUID or ""))
 	lastBroadcast = { time = now, x = x, y = y, instance = instance }
 end
 
@@ -243,15 +245,17 @@ local function OnAddonMessage(prefix, text, channel, sender)
 		positions[name] = nil
 		return
 	end
-	local instance, x, y = text:match("^P:(%-?%d+):(%-?[%d%.]+):(%-?[%d%.]+)$")
-	if instance then
-		positions[name] = {
-			instance = tonumber(instance),
-			x = tonumber(x),
-			y = tonumber(y),
-			time = GetTime(),
-		}
-	end
+	-- The trailing GUID is optional so older versions of the addon still work.
+	local instance, x, y, guid = text:match("^P:(%-?%d+):(%-?[%d%.]+):(%-?[%d%.]+):?(%S*)$")
+	if not instance then return end
+	if guid ~= "" and guid == myGUID then return end -- our own echo
+	positions[name] = {
+		instance = tonumber(instance),
+		x = tonumber(x),
+		y = tonumber(y),
+		guid = guid ~= "" and guid or nil,
+		time = GetTime(),
+	}
 end
 
 ---------------------------------------------------------------------------
@@ -275,8 +279,8 @@ end
 local function IsPlayerUnit(unit)
 	local isSelf = UnitIsUnit(unit, "player")
 	if IsSecret(isSelf) or isSelf then return true end
-	local guid, myGUID = UnitGUID(unit), UnitGUID("player")
-	return IsSecret(guid) or guid == myGUID
+	local guid = UnitGUID(unit)
+	return not guid or IsSecret(guid) or guid == myGUID
 end
 
 local function CheckUnit(unit, mx, my, minstance)
@@ -295,7 +299,7 @@ local function CheckUnit(unit, mx, my, minstance)
 		end
 	end
 	if near == nil then near = FallbackInRange(unit) end
-	if near then Consider(name) end
+	if near then Consider(name, UnitGUID(unit)) end
 end
 
 local function Tick()
@@ -315,7 +319,7 @@ local function Tick()
 	if mx then
 		for name, p in pairs(positions) do
 			if p.instance == minstance and Distance(mx, my, p.x, p.y) <= db.range then
-				Consider(name)
+				Consider(name, p.guid)
 			end
 		end
 	end
@@ -390,6 +394,9 @@ UpdateButton = function()
 		button:SetText("Drag to move, click when done")
 		button:Show()
 		return
+	end
+	for i = #pending, 1, -1 do
+		if IsMe(pending[i].name) then table.remove(pending, i) end
 	end
 	if #pending == 0 then
 		button:Hide()
@@ -614,6 +621,7 @@ events:SetScript("OnEvent", function(_, event, ...)
 		CreateButton()
 	elseif event == "PLAYER_LOGIN" then
 		myName = FullName(UnitName("player"))
+		myGUID = UnitGUID("player")
 		C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
 		if C_Item and C_Item.RequestLoadItemDataByID then
 			C_Item.RequestLoadItemDataByID(RANGE_ITEM_15) -- range checks need it cached
